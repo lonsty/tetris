@@ -20,6 +20,8 @@ class Tetromino:
         self.shape = deep_copy_shape(shape)
         self.y = y
         self.x = x
+        # 记录旋转方向（0: 未旋转, 1: 顺时针, -1: 逆时针）
+        self.rotation_direction = 0
 
     def get_coords(self, y=None, x=None, shape=None):
         """
@@ -42,18 +44,38 @@ class Tetromino:
                     coords.append((y + dy, x + dx))
         return coords
 
-    def rotate(self):
+    def rotate_clockwise(self):
         """
-        旋转方块
+        顺时针旋转方块
         """
         self.shape = rotate(self.shape)
+        self.rotation_direction = 1
 
-    def get_rotated(self):
+    def rotate_counterclockwise(self):
         """
-        获取旋转后的形状
+        逆时针旋转方块
+        """
+        # 逆时针旋转相当于顺时针旋转3次
+        for _ in range(3):
+            self.shape = rotate(self.shape)
+        self.rotation_direction = -1
+
+    def get_rotated_clockwise(self):
+        """
+        获取顺时针旋转后的形状
         :return: 旋转后的形状
         """
         return rotate(self.shape)
+
+    def get_rotated_counterclockwise(self):
+        """
+        获取逆时针旋转后的形状
+        :return: 旋转后的形状
+        """
+        shape = self.shape
+        for _ in range(3):
+            shape = rotate(shape)
+        return shape
 
     def width(self):
         """
@@ -77,6 +99,21 @@ class Tetromino:
             or self.shape == rotate(TETROMINOS[0])
             or self.shape == rotate(rotate(TETROMINOS[0]))
             or self.shape == rotate(rotate(rotate(TETROMINOS[0])))
+        )
+
+    def is_T(self):
+        """
+        是否为T型方块
+        :return: bool
+        """
+        # T型方块原始形状
+        original_T = TETROMINOS[2]
+        # 检查当前形状是否是T型方块的旋转变体
+        return (
+            self.shape == original_T
+            or self.shape == rotate(original_T)
+            or self.shape == rotate(rotate(original_T))
+            or self.shape == rotate(rotate(rotate(original_T)))
         )
 
 
@@ -160,6 +197,16 @@ class Board:
         self.grid = new_grid
         return lines_cleared
 
+    def is_perfect_clear(self):
+        """
+        检查是否完美清除（整个棋盘为空）
+        :return: bool
+        """
+        for row in self.grid:
+            if any(cell != 0 for cell in row):
+                return False
+        return True
+
     def draw(self, stdscr, offset_y=0, offset_x=0):
         """
         绘制棋盘（只显示底部20行）
@@ -209,6 +256,38 @@ class Board:
             ghost_y += 1
         return ghost_y
 
+    def check_t_spin(self, tetromino):
+        """
+        检查是否为T-Spin
+        :param tetromino: T型方块对象
+        :return: 是否为T-Spin
+        """
+        if not tetromino.is_T():
+            return False
+
+        # 获取T方块中心坐标
+        center_y = tetromino.y + len(tetromino.shape) // 2
+        center_x = tetromino.x + len(tetromino.shape[0]) // 2
+
+        # 定义四个角落坐标
+        corners = [
+            (center_y - 1, center_x - 1),  # 左上
+            (center_y - 1, center_x + 1),  # 右上
+            (center_y + 1, center_x - 1),  # 左下
+            (center_y + 1, center_x + 1),  # 右下
+        ]
+
+        # 计算被占据的角落数量
+        occupied_corners = 0
+        for y, x in corners:
+            if y < 0 or y >= self.height or x < 0 or x >= self.width:
+                occupied_corners += 1  # 边界视为被占据
+            elif self.grid[y][x]:
+                occupied_corners += 1
+
+        # T-Spin需要至少三个角落被占据
+        return occupied_corners >= 3
+
 
 class TetrisGame:
     """
@@ -224,7 +303,8 @@ class TetrisGame:
         self.config = config or {}
         self.board = Board(24, 10)  # 24行10列，含4行隐藏区
         self.score = 0
-        self.level = self.config.get("level", 1)
+        self.level = self.config.get("level", LEVEL_INIT)
+        self.level_thresholds = self._precompute_level_thresholds()
         self.seven_bag = SevenBag()
         self.current = self._new_tetromino()
         self.next_count = self.config.get("next_count", 6)
@@ -233,6 +313,21 @@ class TetrisGame:
         self.hold_used = False
         self.last_drop = time.time()
         self.game_over = False
+        # 记录上一次消除类型（用于Back-to-Back判断）
+        self.last_clear_type = None  # None, 'normal', 't-spin'
+        # 连击计数器
+        self.combo_count = 0
+        # 记录当前方块是否被旋转过（用于T-Spin检测）
+        self.current_rotated = False
+
+    def _precompute_level_thresholds(self):
+        """预计算所有等级升级所需的分数门槛"""
+        thresholds = [0]  # 等级1的门槛为0
+        for level in range(2, LEVEL_MAX + 2):  # 计算到LEVEL_MAX+1级
+            exponent = level - 2  # 指数计算
+            threshold = LEVEL_UP_BASE * (LEVEL_UP_FACTOR**exponent)
+            thresholds.append(round(threshold))  # 四舍五入取整
+        return thresholds
 
     def _new_tetromino(self):
         """
@@ -266,19 +361,40 @@ class TetrisGame:
 
     def get_drop_time(self):
         """
-        获取当前下落间隔
-        :return: 间隔秒数
+        根据当前等级获取下落时间间隔
+        使用分段函数实现非线性速度变化
         """
-        if self.level >= LEVEL_MAX:
-            return DROP_TIME_MIN
-        t = DROP_TIME_BASE - (self.level - 1) * DROP_TIME_STEP
-        return max(DROP_TIME_MIN, t)
+        if self.level <= 5:
+            # 1-5级：每级减少0.12秒
+            return DROP_TIME_BASE - (self.level - 1) * 0.12
+        elif self.level <= 10:
+            # 6-10级：每级减少0.04秒
+            return 0.25 - (self.level - 5) * 0.04
+        else:
+            # 10级以上：每级减少0.005秒，最低不低于DROP_TIME_MIN
+            drop_time = 0.07 - (self.level - 10) * 0.005
+            return max(drop_time, DROP_TIME_MIN)
 
     def try_level_up(self):
         """
-        检查升级
+        检查升级，支持跨级升级
+        基于指数增长的门槛分数系统
         """
-        new_level = self.score // LEVEL_UP_SCORE + 1
+        # 如果已经是最高等级，不再升级
+        if self.level >= LEVEL_MAX:
+            return
+
+        # 计算可能达到的最高等级
+        new_level = self.level
+        for level in range(self.level + 1, LEVEL_MAX + 1):
+            # 检查分数是否达到该等级的门槛
+            if self.score >= self.level_thresholds[level]:
+                new_level = level
+            else:
+                # 遇到第一个不满足的等级即可停止（门槛分数单调递增）
+                break
+
+        # 如果等级有提升
         if new_level > self.level:
             self.level = new_level
 
@@ -312,9 +428,10 @@ class TetrisGame:
         # 分数和等级
         self.stdscr.addstr(info_y, info_x, f"Score: {self.score}")
         self.stdscr.addstr(info_y + 1, info_x, f"Level: {self.level}")
+        self.stdscr.addstr(info_y + 2, info_x, f"Combo: {self.combo_count}")
 
         # Hold区（分数和等级下方，Next区上方）
-        hold_y = info_y + 3
+        hold_y = info_y + 4
         self.stdscr.addstr(hold_y, info_x, "Hold:")
         hold_content_y = hold_y + 1  # Hold内容上方空一行
         # 当前Hold的方块对象
@@ -340,6 +457,13 @@ class TetrisGame:
                         self.stdscr.addstr(next_content_y + y, info_x + x * 2, SHAPE_CHAR)
             next_content_y += len(tetro.shape) + 1
 
+        # 显示当前状态（T-Spin, Back-to-Back等）
+        status_y = next_content_y + 2
+        if self.last_clear_type == "t-spin":
+            self.stdscr.addstr(status_y, info_x, "T-Spin!")
+        elif self.last_clear_type == "back-to-back":
+            self.stdscr.addstr(status_y, info_x, "Back-to-Back!")
+
         self.stdscr.refresh()
 
     def pause_and_help(self):
@@ -353,14 +477,21 @@ class TetrisGame:
             "游戏已暂停",
             "",
             "操作说明：",
-            "  ←/→  左右移动",
-            "  ↑    旋转",
-            "  ↓    快速下落",
-            "  空格  硬降到底",
-            "  C    Hold/切换方块",
-            "  ESC  暂停并显示本帮助",
+            "  ←/→           左右移动",
+            "  ↑/x           顺时针旋转",
+            "  z             逆时针旋转",
+            "  ↓             快速下落",
+            "  空格          硬降到底",
+            "  C             Hold/切换方块",
+            "  ESC           暂停并显示本帮助",
             "",
-            "按 ESC 或 空格 继续游戏"
+            "特殊玩法：",
+            "  T-Spin        旋转T型方块到角落",
+            "  Back-to-Back  连续T-Spin或消四",
+            "  Combo         连续消除行",
+            "  Perfect Clear 清空整个棋盘",
+            "",
+            "按 ESC 或 空格 继续游戏",
         ]
         # 计算最长行长度
         max_line_len = max(len(line) for line in help_lines)
@@ -373,7 +504,7 @@ class TetrisGame:
         # 等待ESC或空格
         while True:
             key = self.stdscr.getch()
-            if key in (27, ord(' ')):
+            if key in (27, ord(" ")):
                 break
 
     def run(self):
@@ -385,11 +516,21 @@ class TetrisGame:
         while True:
             self.draw()
             if self.game_over:
-                # ...（省略）...
+                max_y, max_x = self.stdscr.getmaxyx()
+                game_over_y = max_y // 2
+                game_over_x = max_x // 2 - 5
+                self.stdscr.addstr(game_over_y, game_over_x, "游戏结束!")
+                self.stdscr.addstr(game_over_y + 1, game_over_x - 5, "按 q 退出, r 重新开始")
+                self.stdscr.refresh()
                 while True:
-                    if self.stdscr.getch() == ord("q"):
+                    key = self.stdscr.getch()
+                    if key == ord("q"):
                         return
+                    elif key == ord("r"):
+                        self.__init__(self.stdscr, self.config)
+                        break
                     time.sleep(0.1)
+                continue
 
             key = self.stdscr.getch()
             force_fix = False
@@ -406,13 +547,22 @@ class TetrisGame:
                 # 下方向键：只加速下落，不触发固定
                 if not self.board.check_collision(self.current, y=self.current.y + 1, x=self.current.x):
                     self.current.y += 1
-            elif key == curses.KEY_UP:
-                rotated = self.current.get_rotated()
+            elif key == curses.KEY_UP or key == ord("x"):  # 顺时针旋转
+                rotated = self.current.get_rotated_clockwise()
                 new_y, new_x = self.wall_kick(self.current, rotated)
                 if new_y is not None:
                     self.current.shape = rotated
                     self.current.y = new_y
                     self.current.x = new_x
+                    self.current_rotated = True
+            elif key == ord("z"):  # 逆时针旋转
+                rotated = self.current.get_rotated_counterclockwise()
+                new_y, new_x = self.wall_kick(self.current, rotated)
+                if new_y is not None:
+                    self.current.shape = rotated
+                    self.current.y = new_y
+                    self.current.x = new_x
+                    self.current_rotated = True
             elif key == ord(" "):
                 # 空格：硬降到底并立即固定
                 while not self.board.check_collision(self.current, y=self.current.y + 1, x=self.current.x):
@@ -430,14 +580,15 @@ class TetrisGame:
                             deep_copy_shape(self.current.shape), 0, 3
                         )
                     self.hold_used = True
+                    self.current_rotated = False  # 重置旋转状态
             elif key == 27:  # ESC
                 self.pause_and_help()
 
             drop_time = self.get_drop_time()
             if time.time() - self.last_drop > drop_time or force_fix:
                 if (
-                    not self.board.check_collision(self.current, y=self.current.y + 1, x=self.current.x)
-                    and not force_fix
+                        not self.board.check_collision(self.current, y=self.current.y + 1, x=self.current.x)
+                        and not force_fix
                 ):
                     self.current.y += 1
                     self.last_drop = time.time()
@@ -460,17 +611,29 @@ class TetrisGame:
                                 if not self.board.check_collision(self.current, y=self.current.y, x=self.current.x + 1):
                                     self.current.x += 1
                                     touch_time = time.time()
-                            elif wait_key == curses.KEY_UP:
-                                rotated = self.current.get_rotated()
+                            elif wait_key == curses.KEY_UP or wait_key == ord("x"):
+                                rotated = self.current.get_rotated_clockwise()
                                 new_y, new_x = self.wall_kick(self.current, rotated, allow_up=True)
                                 if new_y is not None:
                                     self.current.shape = rotated
                                     self.current.y = new_y
                                     self.current.x = new_x
+                                    self.current_rotated = True
+                                    touch_time = time.time()
+                            elif wait_key == ord("z"):
+                                rotated = self.current.get_rotated_counterclockwise()
+                                new_y, new_x = self.wall_kick(self.current, rotated, allow_up=True)
+                                if new_y is not None:
+                                    self.current.shape = rotated
+                                    self.current.y = new_y
+                                    self.current.x = new_x
+                                    self.current_rotated = True
                                     touch_time = time.time()
                             elif wait_key == ord(" "):
                                 # 空格：硬降到底并立即固定
-                                while not self.board.check_collision(self.current, y=self.current.y + 1, x=self.current.x):
+                                while not self.board.check_collision(
+                                        self.current, y=self.current.y + 1, x=self.current.x
+                                ):
                                     self.current.y += 1
                                 fixed = True
                                 break
@@ -483,14 +646,103 @@ class TetrisGame:
                                 break
                             time.sleep(0.02)
                     if fixed:
+                        # 检查是否为T-Spin（只有T型且最后一次有旋转才判定）
+                        is_t_spin = False
+                        if self.current.is_T() and self.current_rotated:
+                            is_t_spin = self.board.check_t_spin(self.current)
+
+                        # 固定方块到棋盘
                         self.board.fix_tetromino(self.current)
+
+                        # 消除行
                         lines = self.board.remove_full_lines()
+
+                        # 检查是否为完美清除
+                        is_perfect_clear = self.board.is_perfect_clear()
+
+                        # 计算得分
+                        base_score = 0
+                        spin_bonus = 0
+                        back_to_back_bonus = 0
+                        perfect_clear_bonus = 0
+                        combo_bonus = 0
+
+                        # 基础行消除得分
+                        if lines == 1:
+                            base_score = 100 * self.level
+                        elif lines == 2:
+                            base_score = 300 * self.level
+                        elif lines == 3:
+                            base_score = 500 * self.level
+                        elif lines == 4:
+                            base_score = 800 * self.level
+
+                        # T-Spin奖励
+                        if is_t_spin:
+                            if lines == 0:
+                                spin_bonus = 400 * self.level  # T-Spin无消除
+                            elif lines == 1:
+                                spin_bonus = 800 * self.level  # T-Spin Single
+                            elif lines == 2:
+                                spin_bonus = 1200 * self.level  # T-Spin Double
+                            elif lines == 3:
+                                spin_bonus = 1600 * self.level  # T-Spin Triple
+
+                        # Back-to-Back奖励（连续T-Spin消除或Tetris）
+                        is_b2b = False
+                        if (is_t_spin and lines > 0) or lines == 4:
+                            if self.last_clear_type in ["t-spin", "back-to-back", "tetris"]:
+                                is_b2b = True
+                                back_to_back_bonus = int((base_score + spin_bonus) * 0.5)  # 50%额外奖励
+
+                        # 完美清除奖励
+                        if is_perfect_clear:
+                            if lines == 1:
+                                perfect_clear_bonus = 800 * self.level
+                            elif lines == 2:
+                                perfect_clear_bonus = 1200 * self.level
+                            elif lines == 3:
+                                perfect_clear_bonus = 1800 * self.level
+                            elif lines == 4:
+                                perfect_clear_bonus = 2000 * self.level
+
+                        # 连击奖励（combo）：连续多次消除行
                         if lines > 0:
-                            self.score += SCORES.get(lines, lines * 100)
-                            self.try_level_up()
+                            combo_bonus = 50 * self.combo_count * self.level
+                            self.combo_count += 1
+                        else:
+                            self.combo_count = 0
+
+                        # 总得分
+                        total_score = base_score + spin_bonus + back_to_back_bonus + perfect_clear_bonus + combo_bonus
+                        self.score += total_score
+
+                        # 更新消除类型状态
+                        if is_t_spin and lines > 0:
+                            if is_b2b:
+                                self.last_clear_type = "back-to-back"
+                            else:
+                                self.last_clear_type = "t-spin"
+                        elif lines == 4:
+                            if is_b2b:
+                                self.last_clear_type = "back-to-back"
+                            else:
+                                self.last_clear_type = "tetris"
+                        elif lines > 0:
+                            self.last_clear_type = "normal"
+                        else:
+                            # 没有消除行，保持上一次的类型（不重置last_clear_type）
+                            pass
+
+                        # 升级检查
+                        self.try_level_up()
+
+                        # 生成新方块
                         self.current = self.next_list.pop(0)
                         self.next_list.append(self._new_tetromino())
                         self.hold_used = False
+                        self.current_rotated = False  # 新方块未旋转
+
                         # 顶部4行有方块则Game Over
                         if self.board.check_collision(self.current):
                             self.game_over = True
