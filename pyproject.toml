@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tetris"
+name = "cli-tetris"
 version = "0.1.0"
 description = "俄罗斯方块命令行游戏"
 authors = [

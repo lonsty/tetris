@@ -5,7 +5,7 @@
 
 俄罗斯方块命令行游戏，基于 Python [curses](https://docs.python.org/3/library/curses.html) 和 [Typer](https://typer.tiangolo.com/) 实现，支持多种参数自定义，支持预告方块、影子方块、难度调节等特性。
 
-![tetris-demo](tetris.png)
+![tetris-demo](https://raw.githubusercontent.com/lonsty/tetris/refs/heads/master/tetris.png)
 
 ## 特性
 
@@ -30,7 +30,7 @@ pip install .
 或直接通过 pip 安装：
 
 ```bash
-pip install tetris
+pip install -U cli-tetris
 ```
 
 ## 快速开始
@@ -68,8 +68,8 @@ tetris --game-fps 120 --board-height 24 --board-width 12 --next-count 2
 | 参数名                  | 默认值  | 说明     |
 |----------------------|------|--------|
 | --game-fps        -f | 60   | 游戏帧率   |
-| --board-height    -H | 20   | 棋盘高度   |
-| --board-width     -W | 10   | 棋盘宽度   |
+| --board-height    -h | 20   | 棋盘高度   |
+| --board-width     -w | 10   | 棋盘宽度   |
 | --drop-time-base     | 0.8  | 初始下落间隔（秒） |
 | --drop-time-min      | 0.03 | 最快下落间隔（秒） |
 | --level-max       -m | 15   | 最高难度等级 |

@@ -12,8 +12,8 @@ app = typer.Typer(help="俄罗斯方块命令行游戏")
 @app.callback(invoke_without_command=True)
 def main(
     game_fps: float = typer.Option(GAME_FPS, "-f", "--game-fps", help="游戏帧率"),
-    board_height: int = typer.Option(BOARD_HEIGHT, "-H", "--height", help="棋盘高度"),
-    board_width: int = typer.Option(BOARD_WIDTH, "-W", "--width", help="棋盘宽度"),
+    board_height: int = typer.Option(BOARD_HEIGHT, "-h", "--height", help="棋盘高度"),
+    board_width: int = typer.Option(BOARD_WIDTH, "-w", "--width", help="棋盘宽度"),
     drop_time_base: float = typer.Option(DROP_TIME_BASE, "--drop-time-base", help="初始下落间隔（秒）"),
     drop_time_min: float = typer.Option(DROP_TIME_MIN, "--drop-time-min", help="最快下落间隔（秒）"),
     level_max: int = typer.Option(LEVEL_MAX, "-m", "--level-max", help="最高难度等级"),
